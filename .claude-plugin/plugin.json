@@ -1,0 +1,42 @@
+{
+  "name": "claudekeys",
+  "displayName": "ClaudeKeys",
+  "version": "0.1.0",
+  "description": "Session-scoped, encrypted, read-only secrets that Claude uses in commands as {{ck:NAME}} without ever seeing them",
+  "author": {
+    "name": "dixonSolutions"
+  },
+  "license": "MIT",
+  "keywords": [
+    "secrets",
+    "privacy",
+    "mod",
+    "mcp"
+  ],
+  "mcpServers": {
+    "claudekeys": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/dist/mcp/server.js"
+      ]
+    }
+  },
+  "userConfig": {
+    "retain_hours": {
+      "type": "number",
+      "title": "Keep secrets for (hours)",
+      "description": "Encrypted secrets of a session nobody has used for this long are deleted. They survive /resume within this window.",
+      "default": 24,
+      "min": 1,
+      "max": 720
+    },
+    "show_badge": {
+      "type": "boolean",
+      "title": "Show the key badge above the prompt",
+      "description": "A right-aligned key with the number of secrets in this session. /keys opens the same pane.",
+      "default": true
+    }
+  },
+  "homepage": "https://github.com/dixonSolutions/ClaudeKeys",
+  "repository": "https://github.com/dixonSolutions/ClaudeKeys"
+}

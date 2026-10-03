@@ -1,0 +1,28 @@
+{
+  "name": "claudekeys",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Session-scoped, encrypted, read-only secrets for Claude Code",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "types": "claude -p ok --plugin-dir . --model haiku > /dev/null",
+    "build": "tsc -p tsconfig.node.json && tsc -p tsconfig.mod.json",
+    "typecheck": "tsc -p tsconfig.spec.json --noEmit && tsc -p tsconfig.check.json",
+    "test:node": "tsc -p tsconfig.spec.json && node --test .spec-out/spec/*.spec.js",
+    "test:mod": "claude plugin test",
+    "test": "npm run build && npm run test:node && npm run test:mod && claude plugin validate .",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dixonSolutions/ClaudeKeys.git"
+  }
+}

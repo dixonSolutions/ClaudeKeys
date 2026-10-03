@@ -1,0 +1,1 @@
+{ "modules": ["../dist/mod/register.js"] }

@@ -1,0 +1,12 @@
+{
+  "name": "dixonsolutions",
+  "owner": { "name": "dixonSolutions", "url": "https://github.com/dixonSolutions" },
+  "description": "Claude Code plugins by dixonSolutions",
+  "plugins": [
+    {
+      "name": "claudekeys",
+      "source": ".",
+      "description": "Session-scoped, encrypted, read-only secrets that Claude uses in commands as {{ck:NAME}} without ever seeing them"
+    }
+  ]
+}

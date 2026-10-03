@@ -1,0 +1,13 @@
+#!/bin/sh
+# Print a ClaudeKeys one-time file and delete it. Only ClaudeKeys' own command
+# rewrite calls this; the guard refuses it in commands Claude writes.
+f=$1
+case $f in
+  */claudekeys-[0-9a-f]*) ;;
+  *) echo "ck-take: not a ClaudeKeys file" >&2; exit 2 ;;
+esac
+[ -f "$f" ] || { echo "ck-take: value already used or expired" >&2; exit 3; }
+cat -- "$f"
+rc=$?
+rm -f -- "$f"
+exit $rc

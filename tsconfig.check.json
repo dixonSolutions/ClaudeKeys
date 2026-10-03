@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.mod.json",
+  "compilerOptions": { "noEmit": true, "rootDir": "." },
+  "include": ["src/mod", "src/shared", "tests"]
+}

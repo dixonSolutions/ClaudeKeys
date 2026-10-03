@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["es2023"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "typeRoots": ["./.claude-plugin/types"],
+    "types": ["claude-code", "claude-code-tools"]
+  },
+  "include": ["src/mod", "src/shared"]
+}
