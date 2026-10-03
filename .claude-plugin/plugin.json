@@ -32,8 +32,8 @@
     },
     "show_badge": {
       "type": "boolean",
-      "title": "Show the key badge above the prompt",
-      "description": "A right-aligned key with the number of secrets in this session. /keys opens the same pane.",
+      "title": "Show the key pill in the prompt box",
+      "description": "A key pill with the number of secrets in this session, beside the submit button. /keys opens the same pane.",
       "default": true
     }
   },

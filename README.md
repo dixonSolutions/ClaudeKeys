@@ -13,7 +13,9 @@ come back.
 
 ## What you get
 
-- **A key badge above the prompt** (`🔑 2`) with the number of secrets in this session.
+- **A key pill inside the prompt box** (`🔑 2`) with the number of secrets in this session.
+  It sits in the prompt's footer, after Claude Code's mode labels: beside the submit and
+  stop button in the Desktop app, and at the right end of the footer row in the terminal.
   Press it, or run `/keys`, to open the pane.
 - **The pane**: every secret with its name, its length shown as dots, and when it was
   added. You add a secret by name, then type the value into a hidden dialog (zenity) or the
@@ -47,12 +49,12 @@ GNOME keyring instead of a 0600 file.
 ```
 
 Two options appear in `/config`: `retain_hours`, how long an unused session's secrets
-are kept (default 24, so they survive `/resume`), and `show_badge`.
+are kept (default 24, so they survive `/resume`), and `show_badge`, which shows or hides the pill.
 
 ## Privacy model
 
 ClaudeKeys has three parts. The **mod** (`src/mod`) runs inside Claude Code: it draws the
-badge and pane, and rewrites and masks tool calls. The **vault** (`src/vault`) is a small
+pill and pane, and rewrites and masks tool calls. The **vault** (`src/vault`) is a small
 Node program that does the encryption. The **MCP server** (`src/mcp`) lists names.
 Encryption lives in Node because the mods runtime only offers `crypto.subtle.digest`,
 with no AES or HKDF.
@@ -143,7 +145,7 @@ claude --plugin-dir .   # try it; rebuilt files reload within ~30 s
 
 ```
 src/shared/names.ts   names, placeholders, filters: used by all three parts
-src/mod/register.ts   the mod: badge, pane, /keys, tool.call guard + injection + masking
+src/mod/register.ts   the mod: pill, pane, /keys, tool.call guard + injection + masking
 src/mod/inject.ts     pure helpers: command rewrite, guard, masking
 src/vault/            Node: crypto.ts (HKDF + AES-GCM), keys.ts (keyring/file), store.ts, cli.ts
 src/mcp/server.ts     Node: stdio MCP server with list_secrets

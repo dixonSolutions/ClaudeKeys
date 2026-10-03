@@ -152,21 +152,22 @@ export function register(on, options) {
             return next(e);
         return next({ ...e, message: { ...e.message, content } });
     });
-    // The key badge, right-aligned in the band above the prompt.
-    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    // The key pill, inside the prompt box: the footer's mode labels site, which
+    // the Desktop app draws in the composer beside submit/stop and the terminal
+    // at the right of the footer under the prompt. Drawn after Claude Code's own
+    // labels, so it sits rightmost, nearest the submit button.
+    on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
         const theirs = await next(e);
         if (!showBadge)
             return theirs;
         const { Box, Button } = $.ui.resolve(e);
         const n = meta.length;
-        const badge = Button({ key: 'ck-badge', label: '🔑 ' + n, plain: true, dimColor: n === 0, onPress: () => void openPane($) });
-        // Claude Code draws the band's collapse control, [-], over its last
-        // columns, so the badge keeps clear of them.
-        const right = Box({ flexShrink: 0, paddingRight: 4, children: [badge] });
+        const pill = Button({ key: 'ck-pill', label: '🔑 ' + n, dimColor: n === 0, onPress: () => void openPane($) });
         return Box({
             flexDirection: 'row',
-            justifyContent: 'flex-end',
-            children: theirs ? [Box({ flexGrow: 1, flexShrink: 1, children: [theirs] }), right] : [right],
+            alignItems: 'center',
+            columnGap: 1,
+            children: theirs ? [theirs, Box({ flexShrink: 0, children: [pill] })] : [Box({ flexShrink: 0, children: [pill] })],
         });
     });
     // The popover: every secret with its length, and a form to add one.

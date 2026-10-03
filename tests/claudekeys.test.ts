@@ -173,19 +173,23 @@ test('the pane adds a secret and lists it by length only', async ($, on) => {
   await ui.unmount()
 })
 
-test('the badge shows the number of secrets', async ($, on) => {
+test('the pill sits after the footer labels and counts the secrets, on both surfaces', async ($, on) => {
   harness(on, new Map([['A_TOKEN', 'aaaaaaaaaa'], ['B_TOKEN', 'bbbbbbbbbb']]))
-  on('ui.render', () => ({ type: 'Text', props: {}, children: [''] }))
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['auto mode'] }))
   on('session.start', () => ({ cwd: '/work' }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
-  const band = await $.ui.mount({
-    plugin: 'claudekeys',
-    component: 'AbovePrompt',
-    requestId: 'band',
-    surface: 'terminal',
-    viewport: { columns: 100, rows: 30 },
-    props: { hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 100, scroll: { offset: 0, bodyRows: 3 }, view: {} },
-  })
-  const badge = await band.find({ key: 'ck-badge' })
-  expect(badge?.props.label).toBe('🔑 2')
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const footer = await $.ui.mount({
+      plugin: 'claudekeys',
+      component: 'SessionMode',
+      requestId: 'modes',
+      surface,
+      viewport: { columns: 100, rows: 30 },
+      props: { modes: ['auto mode'] },
+    })
+    expect((await footer.find({ key: 'ck-pill' }))?.props.label).toBe('🔑 2')
+    // Claude Code's own labels are still drawn, ahead of the pill.
+    expect(await footer.find({ type: 'Text', text: 'auto mode' })).toBeDefined()
+    await footer.unmount()
+  }
 })
