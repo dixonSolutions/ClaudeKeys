@@ -1,7 +1,7 @@
 {
   "name": "claudekeys",
   "displayName": "ClaudeKeys",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Session-scoped, encrypted, read-only secrets that Claude uses in commands as {{ck:NAME}} without ever seeing them",
   "author": {
     "name": "dixonSolutions"

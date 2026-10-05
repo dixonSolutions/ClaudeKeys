@@ -35,6 +35,33 @@ come back.
 - **Masking**: any tool result, transcript row or notification that contains a value
   shows `[ck:NAME]` instead. If you paste a stored value into a prompt, it becomes its
   placeholder before Claude reads it.
+- **A command line** for every client, including the web and phone apps over Remote
+  Control, which draw no pane (below).
+
+### The /keys command line
+
+```text
+/keys                          the pane; over Remote Control, a list and this help
+/keys list                     names and lengths
+/keys add NAME --env VAR       the value of an environment variable on this machine
+/keys add NAME --file PATH     the contents of a file on this machine (~ allowed)
+/keys add NAME --cmd COMMAND   a command's output on this machine: gh auth token, pass show x, op read ...
+/keys add NAME                 the pane's value step; over Remote Control, a question dialog
+/keys add NAME VALUE           the value inline
+/keys rm NAME                  delete one
+/keys forget                   delete every secret of this session
+```
+
+Prefer `--env`, `--file` and `--cmd` from a phone or the web: the value is read on the
+machine Claude Code runs on, so only the reference travels with the command. A trailing
+newline is dropped.
+
+`/keys add NAME VALUE` works, but the value travels with the command. ClaudeKeys masks it in
+the row Claude reads and in the recorded command run, yet Claude Code keeps one plaintext
+copy of the prompt as typed in this session's transcript file (`~/.claude/projects/…`,
+0600) before any plugin can see it, and a Remote Control client sends it through
+claude.ai. The dialog of `/keys add NAME` has the same transport, and shows the value as you
+type it. Claude can't run `/keys` itself: a Skill call for it is refused.
 
 ## Install
 
@@ -130,6 +157,8 @@ very unlikely. It does not stop a model, or a person, set on extracting one:
 - `$(…)` drops trailing newlines, so a value that ends in a newline loses it.
 - The pane's own field shows the value as you type. Use the hidden dialog when someone is
   watching, or when you're recording.
+- `/keys add NAME VALUE` leaves the value as typed in the session's transcript file (see
+  "The /keys command line"). Use `--env`, `--file` or `--cmd` instead.
 - Developed and tested on Linux (Ubuntu, GNOME) with Claude Code 2.1.288. The mods API is
   new and may change between releases.
 
@@ -147,6 +176,7 @@ claude --plugin-dir .   # try it; rebuilt files reload within ~30 s
 src/shared/names.ts   names, placeholders, filters: used by all three parts
 src/mod/register.ts   the mod: pill, pane, /keys, tool.call guard + injection + masking
 src/mod/inject.ts     pure helpers: command rewrite, guard, masking
+src/mod/command.ts    pure helpers: the /keys command line, echo masking
 src/vault/            Node: crypto.ts (HKDF + AES-GCM), keys.ts (keyring/file), store.ts, cli.ts
 src/mcp/server.ts     Node: stdio MCP server with list_secrets
 bin/ck-take           prints a one-time file and deletes it

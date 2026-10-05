@@ -5,6 +5,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { guardReason, makeRedactor, rewriteCommand, storagePatterns, variantsOf } from '../src/mod/inject.ts'
 import { findPlaceholders, filterMatches, normalizeName } from '../src/shared/names.ts'
+import { isKeysSkill, maskEcho, maskKeysCommandText, parseKeysArgs } from '../src/mod/command.ts'
 
 const SECRET = 'ghp_TopSecretValue12345'
 const DIRS = { state: '/home/u/.local/state', config: '/home/u/.config', runtime: '/run/user/1000' }
@@ -63,6 +64,12 @@ function harness(on: On, vault: Vault) {
   on('session.id', () => ({ value: 'sess-1234abcd' }))
   on('env.get', ($, e) => ({ value: ({ HOME: '/home/u', XDG_RUNTIME_DIR: '/run/user/1000' } as Record<string, string>)[e.name] }))
   on('command.register', () => ({ value: undefined }) as never)
+  // The engine's record of a /keys run: what it was handed is what it keeps.
+  const recorded: string[] = []
+  on('command.run', ($, e) => {
+    recorded.push(e.args)
+    return {}
+  })
   on('ui.toast', ($, e) => {
     toasts.push(e.text)
     return { value: undefined } as never
@@ -80,12 +87,23 @@ function harness(on: On, vault: Vault) {
         reply = { ok: true, secrets: list() }
       }
       if (req.op === 'reveal') reply = { ok: true, values: Object.fromEntries(vault) }
+      if (req.op === 'delete') {
+        vault.delete(req.name)
+        reply = { ok: true, secrets: list() }
+      }
       return { value: { exitCode: 0, stdout: JSON.stringify(reply), stderr: '' } } as never
+    }
+    if (e.argv[0] === 'printenv') {
+      const v = e.argv[2] === 'HOST_TOKEN' ? 'from-the-environment-123\n' : ''
+      return { value: { exitCode: v ? 0 : 1, stdout: v, stderr: '' } } as never
+    }
+    if (e.argv[0] === 'sh' && e.argv[1] === '-c' && e.argv[2] === 'gh auth token') {
+      return { value: { exitCode: 0, stdout: 'gho_FromTheCommand9876\n', stderr: '' } } as never
     }
     if (e.argv[0] === 'sh' && e.argv[4]) writes.set(e.argv[4], e.init?.stdin ?? '')
     return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
   })
-  return { toasts, ran, writes }
+  return { toasts, ran, writes, recorded }
 }
 
 test('a placeholder is injected through a one-time file and the output is masked', async ($, on) => {
@@ -192,4 +210,86 @@ test('the pill sits after the footer labels and counts the secrets, on both surf
     expect(await footer.find({ type: 'Text', text: 'auto mode' })).toBeDefined()
     await footer.unmount()
   }
+})
+
+// --- The /keys command line ------------------------------------------------------
+
+// Runs /keys as a plugin would; the engine stamps origin and presentation.
+function keys($: { command: { run: (input: never) => Promise<unknown> } }, args: string): Promise<{ text?: string }> {
+  return $.command.run({ command: 'keys', args } as never) as Promise<{ text?: string }>
+}
+
+test('the command line parses sources, inline values and the rest', async () => {
+  expect(parseKeysArgs('')).toEqual({ op: 'open' })
+  expect(parseKeysArgs(' list ')).toEqual({ op: 'list' })
+  expect(parseKeysArgs('rm gh_token')).toEqual({ op: 'rm', name: 'GH_TOKEN' })
+  expect(parseKeysArgs('add gh_token')).toEqual({ op: 'add', name: 'GH_TOKEN' })
+  expect(parseKeysArgs('add GH_TOKEN --env GITHUB_TOKEN')).toEqual({ op: 'add', name: 'GH_TOKEN', source: { kind: 'env', ref: 'GITHUB_TOKEN' } })
+  expect(parseKeysArgs('add NPM --file ~/.npm token')).toEqual({ op: 'add', name: 'NPM', source: { kind: 'file', ref: '~/.npm token' } })
+  expect(parseKeysArgs('add GH --cmd "gh auth token"')).toEqual({ op: 'add', name: 'GH', source: { kind: 'cmd', ref: 'gh auth token' } })
+  expect(parseKeysArgs('add GH ' + SECRET)).toEqual({ op: 'add', name: 'GH', value: SECRET })
+  expect(parseKeysArgs('add 1BAD x').op).toBe('error')
+  expect(parseKeysArgs('frobnicate').op).toBe('error')
+})
+
+test('an inline value is masked in the echo and as typed, nothing else is touched', async () => {
+  const echo = '<command-name>/keys</command-name>\n<command-message>keys</command-message>\n<command-args>add GH_TOKEN ' + SECRET + '</command-args>'
+  expect(maskKeysCommandText(echo)).toBe('<command-name>/keys</command-name>\n<command-message>keys</command-message>\n<command-args>add GH_TOKEN [ck:GH_TOKEN]</command-args>')
+  expect(maskKeysCommandText('/keys add gh_token "' + SECRET + '"')).toBe('/keys add gh_token [ck:GH_TOKEN]')
+  expect(maskKeysCommandText('/keys add GH --env X')).toBe('/keys add GH --env X')
+  expect(maskKeysCommandText('/other add GH ' + SECRET)).toBe('/other add GH ' + SECRET)
+  expect(isKeysSkill({ tool: 'Skill', skill: 'keys', args: 'add X y' })).toBe(true)
+  expect(isKeysSkill({ tool: 'Skill', skill: 'claudekeys:keys' })).toBe(true)
+  expect(isKeysSkill({ tool: 'Skill', skill: 'monkeys' })).toBe(false)
+})
+
+test('/keys add reads the value on this machine, from the environment or a command', async ($, on) => {
+  const vault: Vault = new Map()
+  harness(on, vault)
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const env = await keys($, 'add HOST --env HOST_TOKEN')
+  expect(vault.get('HOST')).toBe('from-the-environment-123')
+  expect(env.text).toContain('HOST saved (24 chars)')
+  expect(env.text).not.toContain('from-the-environment')
+  await keys($, 'add GH --cmd "gh auth token"')
+  expect(vault.get('GH')).toBe('gho_FromTheCommand9876')
+  const missing = await keys($, 'add NOPE --env NOT_SET')
+  expect(missing.text).toContain('not set')
+  expect(vault.has('NOPE')).toBe(false)
+  const list = await keys($, 'list')
+  expect(list.text).toContain('ck:GH}}  22 chars')
+  const again = await keys($, 'add GH x1234567')
+  expect(again.text).toContain('already set')
+  await keys($, 'rm gh')
+  expect(vault.has('GH')).toBe(false)
+})
+
+test('/keys add NAME VALUE stores the value, and its recorded echo shows only the mask', async ($, on) => {
+  const vault: Vault = new Map()
+  const h = harness(on, vault)
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const out = await keys($, 'add GH_TOKEN ' + SECRET)
+  expect(vault.get('GH_TOKEN')).toBe(SECRET)
+  expect(out.text).not.toContain(SECRET)
+  expect(out.text).toContain('--env, --file or --cmd')
+  // The run the engine records holds the mask, not the value.
+  expect(h.recorded).toEqual(['add GH_TOKEN [ck:GH_TOKEN]'])
+  // The echo row, as session.append hands it over, keeps only the mask.
+  const row = [{ type: 'text', text: '<command-name>/keys</command-name>\n<command-args>add GH_TOKEN ' + SECRET + '</command-args>' }, { type: 'image' }]
+  const masked = JSON.stringify(maskEcho(row))
+  expect(masked).not.toContain(SECRET)
+  expect(masked).toContain('add GH_TOKEN [ck:GH_TOKEN]')
+  const other = [{ type: 'text', text: 'hello' }]
+  expect(maskEcho(other)).toBe(other)
+})
+
+test('Claude cannot run /keys through the Skill tool', async ($, on) => {
+  harness(on, new Map())
+  on('tool.call', () => ({ result: 'ran' }))
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const out = (await $.tool.call({ tool: 'Skill', skill: 'keys', args: 'add X --file ~/.ssh/id_ed25519' } as never)) as { deny?: string }
+  expect(out.deny).toContain('Only the user manages')
 })

@@ -14,6 +14,7 @@
 //      reads them or they are stored.
 import { findPlaceholders, NAME_RE, normalizeName, placeholderFor } from '../shared/names.js';
 import { changed, effectiveCommand, guardReason, isRewritten, makeRedactor, maskOf, rewriteCommand, storagePatterns, } from './inject.js';
+import { chompValue, expandHome, isKeysSkill, maskEcho, maskKeysArgs, maskKeysCommandText, parseKeysArgs, USAGE } from './command.js';
 const PANE = 'claudekeys';
 const LIST_TOOL = /^mcp__.*claudekeys.*__list_secrets$/;
 // Session state, rebuilt on load and after /clear, /resume and /branch.
@@ -41,8 +42,8 @@ export function register(on, options) {
         try {
             await $.command.register({
                 name: 'keys',
-                description: "Open ClaudeKeys: this session's secrets (add, list, delete)",
-                argumentHint: '[forget]',
+                description: "ClaudeKeys: this session's secrets. /keys opens the pane; /keys add NAME --env VAR|--file PATH|--cmd CMD, list, rm NAME",
+                argumentHint: '[add NAME [--env VAR | --file PATH | --cmd CMD | VALUE] | list | rm NAME | forget]',
                 immediate: true,
             });
         }
@@ -60,20 +61,29 @@ export function register(on, options) {
         values = null;
         return next(e);
     });
-    on('command.run', { command: 'keys' }, async ($, e) => {
-        if (String(e.args ?? '').trim() === 'forget') {
-            await vault($, { op: 'forget', sessionId });
-            await refresh($);
-            return { text: 'ClaudeKeys: forgot every secret of this session.' };
+    // The command line works on every surface. Over Remote Control (a web or
+    // phone client) no pane reaches the person, so text and dialogs stand in.
+    on('command.run', { command: 'keys' }, async ($, e, next) => {
+        const remote = e.origin?.kind === 'bridge';
+        const args = String(e.args ?? '');
+        let text;
+        try {
+            text = await runKeys($, parseKeysArgs(args), remote);
         }
-        await openPane($);
-        return {};
+        catch (err) {
+            text = 'ClaudeKeys: ' + String(err instanceof Error ? err.message : err);
+        }
+        // Hand the engine the masked args, so the run it records holds no value.
+        const recorded = await next({ ...e, args: maskKeysArgs(args) });
+        return text ? { ...recorded, text } : recorded;
     });
     // Guard, inject and mask every tool call, subagents' and MCP tools' included.
     on('tool.call', async ($, e, next) => {
         const reason = guardReason(e, storagePatterns(dirs));
         if (reason)
             return { deny: reason };
+        if (isKeysSkill(e))
+            return { deny: 'Only the user manages ClaudeKeys secrets. Ask them to run /keys.' };
         if (LIST_TOOL.test(e.tool))
             return next({ ...e, session_id: sessionId });
         if (e.tool === 'Bash' && findPlaceholders(e.command).length > 0) {
@@ -122,9 +132,10 @@ export function register(on, options) {
     // A secret pasted into a prompt becomes its placeholder before Claude reads
     // it, and Claude learns which names exist whenever the set changes.
     on('prompt.submit', async ($, e, next) => {
+        const typed = maskKeysCommandText(e.text);
         if (meta.length === 0)
-            return next(e);
-        let text = e.text;
+            return typed === e.text ? next(e) : next({ ...e, text: typed });
+        let text = typed;
         const red = await redactor($);
         const replaced = red.toPlaceholders(text);
         if (replaced !== text) {
@@ -141,13 +152,16 @@ export function register(on, options) {
     });
     // Last line of defence: mask anything else headed for the transcript, such
     // as task notifications, hook output and messages from other sessions.
+    // A /keys add NAME VALUE echo is masked by its shape, whether it is recorded
+    // before or after the value is stored.
     on('session.append', async ($, e, next) => {
+        const echo = maskEcho(e.message.content);
         if (meta.length === 0)
-            return next(e);
+            return echo === e.message.content ? next(e) : next({ ...e, message: { ...e.message, content: echo } });
         const red = await redactor($);
         if (red.isEmpty)
-            return next(e);
-        const content = red.deep(e.message.content);
+            return echo === e.message.content ? next(e) : next({ ...e, message: { ...e.message, content: echo } });
+        const content = red.deep(echo);
         if (!changed(content, e.message.content))
             return next(e);
         return next({ ...e, message: { ...e.message, content } });
@@ -342,36 +356,126 @@ async function addFromDialog($) {
 async function addSecret($, name, value) {
     if (!name || step !== 'value')
         return;
-    if (!value) {
-        void $.ui.toast('Empty value: nothing saved.');
-        return;
-    }
     try {
-        meta = (await vault($, { op: 'add', sessionId, name, value })).secrets ?? meta;
+        void $.ui.toast(await saveSecret($, name, value));
     }
     catch (err) {
         void $.ui.toast(String(err instanceof Error ? err.message : err));
         return;
     }
-    if (values)
-        values[name] = value;
     step = 'list';
     pendingName = '';
+}
+// Stores one value and says so; throws with a message the person can act on.
+async function saveSecret($, name, value) {
+    if (!value)
+        throw new Error('Empty value: nothing saved.');
+    if (meta.some((m) => m.name === name))
+        throw new Error(name + ' is already set. Secrets are read-only: /keys rm ' + name + ' first to replace it.');
+    meta = (await vault($, { op: 'add', sessionId, name, value })).secrets ?? meta;
+    if (values)
+        values[name] = value;
     $.ui.invalidate('ui.render');
-    void $.ui.toast(name + ' saved (' + value.length + ' chars)' + (value.length < 8 ? '. Short values are masked only as typed, not in encoded forms.' : '.'));
+    return name + ' saved (' + value.length + ' chars). Claude uses it as ' + placeholderFor(name) + (value.length < 8 ? '. Short values are masked only as typed, not in encoded forms.' : '.');
 }
 async function deleteSecret($, name) {
     try {
-        meta = (await vault($, { op: 'delete', sessionId, name })).secrets ?? [];
+        void $.ui.toast(await removeSecret($, name));
     }
     catch (err) {
         void $.ui.toast(String(err instanceof Error ? err.message : err));
-        return;
     }
+}
+async function removeSecret($, name) {
+    if (!meta.some((m) => m.name === name))
+        throw new Error('No secret named ' + name + '.');
+    meta = (await vault($, { op: 'delete', sessionId, name })).secrets ?? [];
     if (values)
         delete values[name];
     $.ui.invalidate('ui.render');
-    void $.ui.toast(name + ' deleted.');
+    return name + ' deleted.';
+}
+// --- The /keys command line ---------------------------------------------------------
+async function runKeys($, cmd, remote) {
+    switch (cmd.op) {
+        case 'error':
+            return cmd.message;
+        case 'help':
+            return 'ClaudeKeys commands:\n' + USAGE;
+        case 'list':
+            return listText();
+        case 'forget':
+            await vault($, { op: 'forget', sessionId });
+            await refresh($);
+            return 'Forgot every secret of this session.';
+        case 'rm':
+            return await removeSecret($, cmd.name);
+        case 'open': {
+            // A pane opened from a phone would land on this machine's terminal.
+            if (!remote && (await openPane($)))
+                return '';
+            return listText() + '\n\n' + USAGE;
+        }
+        case 'add': {
+            if (meta.some((m) => m.name === cmd.name))
+                return cmd.name + ' is already set. Secrets are read-only: /keys rm ' + cmd.name + ' first to replace it.';
+            if (cmd.source)
+                return await saveSecret($, cmd.name, await readSource($, cmd.source));
+            if (cmd.value !== undefined) {
+                const saved = await saveSecret($, cmd.name, cmd.value);
+                return saved + '\nThe value as typed stays in this session\'s transcript file; next time use /keys add ' + cmd.name + ' --env, --file or --cmd.';
+            }
+            if (!remote) {
+                step = 'value';
+                pendingName = cmd.name;
+                confirmDelete = '';
+                if (await placePane($))
+                    return '';
+            }
+            return await askForValue($, cmd.name);
+        }
+    }
+}
+// The value, read on this machine: it never travels with the command.
+async function readSource($, source) {
+    if (source.kind === 'env') {
+        // $.env.get takes literal names only; the variable is the person's to pick.
+        const r = await $.process.run(['printenv', '--', source.ref]);
+        const v = chompValue(r.stdout);
+        if (r.exitCode !== 0 || !v)
+            throw new Error('$' + source.ref + ' is not set in Claude Code\'s environment on this machine.');
+        return v;
+    }
+    if (source.kind === 'file') {
+        const home = (await $.env.get('HOME')) ?? '';
+        return chompValue(String(await $.fs.read(expandHome(source.ref, home))));
+    }
+    const r = await $.process.run(['sh', '-c', source.ref], { timeoutMs: 60000 });
+    if (r.exitCode !== 0)
+        throw new Error('the command exited ' + r.exitCode + '; nothing saved.');
+    return chompValue(r.stdout);
+}
+// Claude Code's own question dialog, which every client draws. The answer is
+// typed under "Other", visible as it is typed.
+async function askForValue($, name) {
+    let answer;
+    try {
+        answer = await $.ui.ask('Type the value for ' + name + ' under Other (visible while you type; Claude only sees its placeholder).', {
+            header: 'ClaudeKeys',
+            options: ['Cancel', 'Not now'],
+        });
+    }
+    catch {
+        return 'No dialog could be shown. Use /keys add ' + name + ' --env VAR, --file PATH or --cmd COMMAND instead.';
+    }
+    if (answer === 'Cancel' || answer === 'Not now' || answer === '')
+        return 'Nothing saved.';
+    return await saveSecret($, name, answer);
+}
+function listText() {
+    if (meta.length === 0)
+        return 'No secrets in this session yet. Add one with /keys add NAME --env VAR (or --file, --cmd).';
+    return meta.length + (meta.length === 1 ? ' secret:\n' : ' secrets:\n') + meta.map((m) => '  ' + placeholderFor(m.name) + '  ' + m.length + ' chars').join('\n');
 }
 // --- Injection -------------------------------------------------------------------
 async function prepareInjection($, command) {
@@ -431,7 +535,16 @@ async function openPane($) {
     step = 'list';
     pendingName = '';
     confirmDelete = '';
-    await $.ui.open({ id: PANE, title: 'ClaudeKeys', focus: true, closeOnEscape: true, rows: 14 });
+    return placePane($);
+}
+// Opens the pane; where no attached surface draws one, closes it again so it
+// does not pop up later, and says so.
+async function placePane($) {
+    const r = await $.ui.open({ id: PANE, title: 'ClaudeKeys', focus: true, closeOnEscape: true, rows: 14 });
+    if (r?.isPlaced !== false)
+        return true;
+    await $.ui.close({ id: PANE });
+    return false;
 }
 function nonce() {
     const bytes = new Uint8Array(16);
